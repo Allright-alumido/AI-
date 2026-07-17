@@ -1,0 +1,22 @@
+pandas>=2.0
+numpy>=1.24
+scikit-learn>=1.3.2
+lightgbm>=4.0
+joblib>=1.3
+gymnasium>=0.29
+stable-baselines3>=2.2
+torch>=2.1
+matplotlib>=3.7
+streamlit>=1.30
+
+# Optional, only needed for the Live Stream tab's auto-play mode (app.py's
+# tab_live_stream). Without it, the tab still works in manual "Advance 1
+# hour" step mode -- auto-play just falls back off with a note.
+# streamlit-autorefresh>=1.0
+
+# Optional, only needed for app.py's AI-generated explanations (explain.py).
+# Uncomment whichever provider you have an API key for; if none are
+# installed/configured, explanations fall back to a template automatically.
+# anthropic>=0.34
+# google-generativeai>=0.5
+# openai>=1.30
