@@ -28,6 +28,19 @@ call fails for any reason. It never raises -- safe to call from a UI
 without extra error handling. It returns (text, source) where source is
 one of "anthropic", "gemini", "openai", "template" so the UI can show
 which one actually produced the text.
+
+Where each key can live (checked in this order via _get_api_key):
+  1. OS environment variable (os.environ) -- convenient for local dev/testing
+     from a terminal, e.g. `$env:ANTHROPIC_API_KEY = "..."` before
+     `streamlit run app.py`.
+  2. Streamlit secrets (.streamlit/secrets.toml), i.e. st.secrets -- the
+     friendlier option for an actually-deployed app: the developer sets the
+     key ONCE in that file at deploy time, and end users never see, enter,
+     or need to know an API key exists at all. Reading st.secrets is wrapped
+     in a try/except and only attempted if `streamlit` is importable, so
+     this module stays fully usable (and unit-testable) in a plain Python
+     environment with no streamlit installed and no secrets.toml present --
+     it just silently skips to the template fallback in that case.
 """
 
 from __future__ import annotations
@@ -35,6 +48,27 @@ from __future__ import annotations
 import os
 
 from reward_configs import SCENARIOS
+
+
+def _get_api_key(*names: str) -> str | None:
+    """Look up any of `names` as an API key, OS environment first, then
+    Streamlit's st.secrets if available (see module docstring). Returns the
+    first non-empty match, or None if nothing is configured anywhere."""
+    for name in names:
+        value = os.environ.get(name)
+        if value:
+            return value
+    try:
+        import streamlit as st
+        for name in names:
+            value = st.secrets.get(name)
+            if value:
+                return value
+    except Exception:
+        # streamlit not installed, no secrets.toml configured, or running
+        # outside a streamlit app context -- fall through silently.
+        pass
+    return None
 
 
 # --------------------------------------------------------------------- #
@@ -142,7 +176,7 @@ def _prompt_for(rec: dict) -> str:
 
 
 def _try_anthropic(prompt: str) -> str | None:
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    api_key = _get_api_key("ANTHROPIC_API_KEY")
     if not api_key:
         return None
     try:
@@ -159,23 +193,43 @@ def _try_anthropic(prompt: str) -> str | None:
 
 
 def _try_gemini(prompt: str) -> str | None:
-    api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+    """Uses Google's current unified SDK (package `google-genai`, imported as
+    `google.genai`). The older `google-generativeai` package (imported as
+    `google.generativeai`, with `genai.configure()` / `GenerativeModel(...)`)
+    is fully deprecated as of 2026 and no longer maintained -- if you installed
+    that one instead, `pip uninstall google-generativeai` and
+    `pip install google-genai`.
+    """
+    api_key = _get_api_key("GOOGLE_API_KEY", "GEMINI_API_KEY")
     if not api_key:
         return None
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        # Update this to whatever Gemini model name is current for your API key
-        # if this one has been deprecated by the time you run this.
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        resp = model.generate_content(prompt)
-        return resp.text.strip()
+        from google import genai
+        client = genai.Client(api_key=api_key)
+        # Try the current flagship Flash model first, then a second,
+        # typically-less-congested free-tier model if that one is briefly
+        # unavailable (Google's free tier returns 503 UNAVAILABLE when a
+        # specific model is under heavy demand -- transient, not a bug, and
+        # a different model ID often has spare capacity at the same moment).
+        # Update these if either has itself been retired/renamed by the time
+        # you run this -- check ai.google.dev/gemini-api/docs/models for the
+        # current stable, free-tier-eligible model names. (Google also
+        # restricts some older model IDs, e.g. gemini-2.5-flash, to existing
+        # projects only -- new API keys get a 404 "no longer available to new
+        # users" even though the model is still listed in the docs.)
+        for model_name in ("gemini-3.5-flash", "gemini-3.1-flash-lite"):
+            try:
+                resp = client.models.generate_content(model=model_name, contents=prompt)
+                return resp.text.strip()
+            except Exception:
+                continue
+        return None
     except Exception:
         return None
 
 
 def _try_openai(prompt: str) -> str | None:
-    api_key = os.environ.get("OPENAI_API_KEY")
+    api_key = _get_api_key("OPENAI_API_KEY")
     if not api_key:
         return None
     try:
